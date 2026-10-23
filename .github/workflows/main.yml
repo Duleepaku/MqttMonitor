@@ -16,10 +16,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Load signing key
+        env:
+          KS: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Signing key loaded"
+          else
+            echo "::warning::KEYSTORE_BASE64 secret not found - APK will NOT have the permanent key"
+          fi
+      - name: Build release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: gradle assembleRelease --stacktrace
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk MqttMonitor.apk
+        run: cp app/build/outputs/apk/release/app-release.apk MqttMonitor.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MqttMonitor-APK
