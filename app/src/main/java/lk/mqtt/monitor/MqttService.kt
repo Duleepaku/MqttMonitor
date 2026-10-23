@@ -1,5 +1,6 @@
 package lk.mqtt.monitor
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,24 +9,29 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.Process
 import androidx.core.app.NotificationCompat
 
 /**
  * Foreground service: keeps the MQTT connection alive while the app is in the
  * background or the screen is off, and shows the last message in the notification.
+ * The notification's "Disconnect & Exit" button closes the connection and the whole app.
  */
 class MqttService : Service(), MqttManager.Listener {
 
     companion object {
         const val CHANNEL = "mqtt_status"
         const val NOTIF_ID = 1
-        const val ACTION_STOP = "lk.mqtt.monitor.STOP"
+        const val ACTION_EXIT = "lk.mqtt.monitor.EXIT"
         @Volatile var running = false
     }
 
     private var statusLine = "Connecting…"
     private var lastMsg = ""
+    private var exiting = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -37,11 +43,8 @@ class MqttService : Service(), MqttManager.Listener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            Prefs(this).autoConnect = false
-            MqttManager.disconnect()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+        if (intent?.action == ACTION_EXIT) {
+            exitApp()
             return START_NOT_STICKY
         }
         val n = buildNotification()
@@ -55,10 +58,31 @@ class MqttService : Service(), MqttManager.Listener {
         return START_STICKY
     }
 
+    /** Disconnect, remove the notification, close every app screen and end the app. */
+    private fun exitApp() {
+        exiting = true
+        running = false
+        MqttManager.removeListener(this)
+        Prefs(this).autoConnect = false
+        MqttManager.disconnect()
+
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
+
+        try {
+            getSystemService(ActivityManager::class.java).appTasks.forEach { it.finishAndRemoveTask() }
+        } catch (e: Exception) { }
+
+        stopSelf()
+        // Give the MQTT client a moment to say goodbye to the broker, then end the process.
+        Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 1200)
+    }
+
     override fun onDestroy() {
         running = false
         MqttManager.removeListener(this)
-        MqttManager.disconnect()
+        if (!exiting) MqttManager.disconnect()
+        getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
         super.onDestroy()
     }
 
@@ -73,7 +97,7 @@ class MqttService : Service(), MqttManager.Listener {
     }
 
     private fun refresh() {
-        if (!running) return
+        if (!running || exiting) return
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification())
     }
 
@@ -83,9 +107,9 @@ class MqttService : Service(), MqttManager.Listener {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val stop = PendingIntent.getService(
+        val exit = PendingIntent.getService(
             this, 1,
-            Intent(this, MqttService::class.java).setAction(ACTION_STOP),
+            Intent(this, MqttService::class.java).setAction(ACTION_EXIT),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val text = if (lastMsg.isNotEmpty()) lastMsg else statusLine
@@ -97,7 +121,7 @@ class MqttService : Service(), MqttManager.Listener {
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(open)
-            .addAction(0, "Disconnect", stop)
+            .addAction(0, "Disconnect & Exit", exit)
             .build()
     }
 }
