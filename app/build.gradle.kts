@@ -3,6 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Permanent signing key comes from GitHub Secrets (see workflow).
+val keystorePath: String? = System.getenv("KEYSTORE_FILE")
+val keystorePassword: String? = System.getenv("KEYSTORE_PASSWORD")
+val hasReleaseKey = keystorePath != null && keystorePassword != null && file(keystorePath).exists()
+
 android {
     namespace = "lk.mqtt.monitor"
     compileSdk = 34
@@ -11,13 +16,25 @@ android {
         applicationId = "lk.mqtt.monitor"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    signingConfigs {
+        create("release") {
+            if (hasReleaseKey) {
+                storeFile = file(keystorePath!!)
+                storePassword = keystorePassword
+                keyAlias = "mqttmonitor"
+                keyPassword = keystorePassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = if (hasReleaseKey) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
     }
     compileOptions {
